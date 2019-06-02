@@ -1,0 +1,28 @@
+{
+  "data": [
+    {
+      "name": "MouseEvents",
+      "source": "Player"
+    },
+    {
+      "name": "KeyboardEvents",
+      "source": "Player"
+    },
+    {
+      "name": "Position",
+      "source": "GameLoop"
+    }
+  ],
+  "functions": [
+    {
+      "name": "UpdatePosition",
+      "owner": "Game",
+      "inputs": [
+        "KeyboardEvents", "MouseEvents", "Position"
+      ],
+      "outputs": [
+        "Position"
+      ]
+    }
+  ]
+}
