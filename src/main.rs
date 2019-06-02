@@ -1,6 +1,7 @@
 use failure::ResultExt;
 use exitfailure::ExitFailure;
 use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
 use structopt::StructOpt;
 
 #[derive(StructOpt)]
@@ -25,12 +26,41 @@ fn main() -> Result<(), ExitFailure> {
 }
 
 fn render<W: std::io::Write>(w: &mut W, graph: &Graph) -> std::io::Result<()> {
+    // See https://www.graphviz.org/doc/info/colors.html for the definitions
+    // of the colour schemes. Functions are colored according to their owner,
+    // wrapping if we run out of colours.
+    const NUM_COLOURS: usize = 8;
+    const COLOUR_SCHEME: &str = "dark28";
+
+    let mut owners: Vec<String> = graph
+        .functions
+        .iter()
+        .map(|f| f.owner.clone())
+        .collect();
+
+    owners.sort();
+    owners.dedup();
+
+    let colours: HashMap<String, String> = owners
+        .iter()
+        .enumerate()
+        .map(|(count, owner)| {
+            let c = count % NUM_COLOURS + 1;
+            (owner.clone(), format!("\"/{}/{}\"", COLOUR_SCHEME, c))
+        })
+        .collect();
+
     writeln!(w, "digraph G {{")?;
     for d in &graph.data {
         writeln!(w, "{} [shape=box]", d.name)?;
     }
     for f in &graph.functions {
-        writeln!(w, "{} [shape=ellipse]", f.name)?;
+        writeln!(
+            w,
+            "{} [shape=ellipse,style=filled,fillcolor={}]",
+            f.name,
+            &colours[&f.owner]
+        )?;
         for i in &f.inputs {
             writeln!(w, "{} -> {}", i, f.name)?;
         }
@@ -38,6 +68,26 @@ fn render<W: std::io::Write>(w: &mut W, graph: &Graph) -> std::io::Result<()> {
             writeln!(w, "{} -> {}", f.name, o)?;
         }
     }
+    writeln!(w, "subgraph cluster_legend {{")?;
+    writeln!(w, "label=\"Legend\"")?;
+    writeln!(w, "rankdir=TB")?;
+    let mut ordering = String::new();
+    for (name, color) in &colours {
+        writeln!(
+            w,
+            "legend_{} [label={},style=filled,fillcolor={}]",
+            name,
+            name,
+            color
+        )?;
+        if !ordering.is_empty() {
+            ordering = ordering + "->";
+        }
+        ordering = format!("{}legend_{}", ordering, name);
+    }
+    ordering = ordering + "[style=invis]";
+    writeln!(w, "{}", ordering)?;
+    writeln!(w, "}}")?;
     writeln!(w, "}}")?;
     Ok(())
 }
@@ -58,6 +108,8 @@ struct Data {
     /// The name of the application or service that maintains
     /// or provides this data.
     source: String,
+    /// Human-readable description of this data.
+    description: Option<String>,
 }
 
 /// A process in a dataflow graph, i.e. a function.
