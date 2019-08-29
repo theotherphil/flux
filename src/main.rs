@@ -11,7 +11,7 @@ struct Cli {
     input: std::path::PathBuf,
 }
 
-/// cargo run -- -i src/sample.json | dot -Tsvg >> sample.svg
+/// cargo run -- -i src/sample.yaml | dot -Tsvg >> sample.svg
 fn main() -> Result<(), ExitFailure> {
     let args = Cli::from_args();
 
@@ -20,9 +20,135 @@ fn main() -> Result<(), ExitFailure> {
             |_| format!("could not read file '{:?}'", &args.input)
         )?;
 
-    let graph: Graph = serde_json::from_str(&content).expect("parse failure");
+    let graph: Graph = serde_yaml::from_str(&content).expect("parse failure");
     render(&mut std::io::stdout(), &graph)?;
     Ok(())
+}
+
+struct DotBuilder {
+    lines: Vec<String>
+}
+
+impl DotBuilder {
+    fn new() -> DotBuilder {
+        DotBuilder { lines: Vec::new() }
+    }
+
+    fn add<S: Into<String>>(&mut self, line: S) {
+        self.lines.push(line.into());
+    }
+
+    fn add_node(&mut self, node: &Node) {
+        self.lines.push(node.to_string());
+    }
+
+    fn render<W: std::io::Write>(&self, w: &mut W) -> std::io::Result<()> {
+        for line in &self.lines {
+            writeln!(w, "{}", line)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+enum Shape {
+    Ellipse
+}
+
+impl Shape {
+    fn to_string(self) -> String {
+        match self {
+            Shape::Ellipse => "ellipse".into()
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+enum Style {
+    Filled
+}
+
+impl Style {
+    fn to_string(self) -> String {
+        match self {
+            Style::Filled => "filled".into()
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+enum ColorScheme {
+    Dark28
+}
+
+impl ColorScheme {
+    fn to_string(self) -> String {
+        match self {
+            ColorScheme::Dark28 => "dark28".into()
+        }
+    }
+
+    fn num_colors(self) -> usize {
+        match self {
+            ColorScheme::Dark28 => 8
+        }
+    }
+}
+
+struct Node {
+    name: String,
+    attributes: HashMap<String, String>,
+}
+
+impl Node {
+    fn new(name: &str) -> Node {
+        Node {
+            name: name.to_string(),
+            attributes: HashMap::new()
+        }
+    }
+
+    fn style(&mut self, style: Style) -> &mut Self {
+        self.attribute("style", style.to_string())
+    }
+
+    fn shape(&mut self, shape: Shape) -> &mut Self {
+        self.attribute("shape", shape.to_string())
+    }
+
+    fn fillcolor(&mut self, color_scheme: ColorScheme, color: &str) -> &mut Self {
+        self.attribute(
+            "fillcolor",
+            format!("\"/{}/{}\"", color_scheme.to_string(), color)
+        )
+    }
+
+    fn attribute<S: Into<String>, T: Into<String>>(
+        &mut self, name: S, value: T) -> &mut Self {
+        self.attributes.insert(name.into(), value.into());
+        self
+    }
+
+    fn to_string(&self) -> String {
+        let mut attrs: Vec<String> = self
+            .attributes
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
+
+        attrs.sort();
+        format!("{}[{}];", self.name, attrs.join("="))
+    }
+}
+
+#[test]
+fn node_to_string() {
+    let mut n = Node::new("foo");
+    let n = n
+        .shape(Shape::Ellipse)
+        .style(Style::Filled)
+        .fillcolor(ColorScheme::Dark28, "1");
+    assert_eq!(n.to_string(), "fff");
 }
 
 fn render<W: std::io::Write>(w: &mut W, graph: &Graph) -> std::io::Result<()> {
@@ -46,50 +172,86 @@ fn render<W: std::io::Write>(w: &mut W, graph: &Graph) -> std::io::Result<()> {
         .enumerate()
         .map(|(count, owner)| {
             let c = count % NUM_COLOURS + 1;
-            (owner.clone(), format!("\"/{}/{}\"", COLOUR_SCHEME, c))
+            //(owner.clone(), format!("\"/{}/{}\"", COLOUR_SCHEME, c))
+            (owner.clone(), c.to_string())
         })
         .collect();
 
-    writeln!(w, "digraph G {{")?;
+    let mut g = DotBuilder::new();
+    g.add("digraph G {{");
     for d in &graph.data {
-        writeln!(w, "{} [shape=box]", d.name)?;
+        g.add(format!("{} [shape=box]", d.name));
     }
+
     for f in &graph.functions {
-        writeln!(
-            w,
-            "{} [shape=ellipse,style=filled,fillcolor={}]",
-            f.name,
-            &colours[&f.owner]
-        )?;
+        g.add_node(Node::new(&f.name)
+            .shape(Shape::Ellipse)
+            .style(Style::Filled)
+            .fillcolor(ColorScheme::Dark28, &colours[&f.owner])
+        );
+        // g.add(format!(
+        //     "{} [shape=ellipse,style=filled,fillcolor={}]",
+        //     f.name,
+        //     &colours[&f.owner]
+        // ));
         for i in &f.inputs {
-            writeln!(w, "{} -> {}", i, f.name)?;
+            g.add(format!(
+                "{} -> {}", i, f.name
+            ));
         }
         for o in &f.outputs {
-            writeln!(w, "{} -> {}", f.name, o)?;
+            g.add(format!(
+                "{} -> {}", f.name, o
+            ));
         }
     }
-    writeln!(w, "subgraph cluster_legend {{")?;
-    writeln!(w, "label=\"Legend\"")?;
-    writeln!(w, "rankdir=TB")?;
+    g.add("subgraph cluster_legend {{");
+    g.add("label=\"Legend\"");
+    g.add("rankdir=TB");
     let mut ordering = String::new();
     for (name, color) in &colours {
-        writeln!(
-            w,
+        g.add(format!(
             "legend_{} [label={},style=filled,fillcolor={}]",
             name,
             name,
             color
-        )?;
+        ));
         if !ordering.is_empty() {
             ordering = ordering + "->";
         }
         ordering = format!("{}legend_{}", ordering, name);
     }
     ordering = ordering + "[style=invis]";
-    writeln!(w, "{}", ordering)?;
-    writeln!(w, "}}")?;
-    writeln!(w, "}}")?;
+    g.add(format!("{}", ordering));
+    g.add("}}");
+    g.add("}}");
+
+    g.render(w)?;
+
     Ok(())
+}
+
+macro_rules! attrs {
+    ( $( $attr:expr => $value:expr),* ) => {
+        {
+            let mut vals = Vec::new();
+            $(
+                vals.push(format!("{}={}", $attr, $value));
+            )*
+            let res = vals.join(",");
+            format!("[{}]", res)
+        }
+    }
+}
+
+#[test]
+fn foo() {
+    let a = attrs!(
+        "label" => "foo",
+        "style" => "filled",
+        "fillcolor" => "red"
+    );
+    assert_eq!(a, String::from("[label=foo,style=filled,fillcolor=red]"));
 }
 
 /// A dataflow graph.
